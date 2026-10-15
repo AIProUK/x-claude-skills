@@ -79,6 +79,12 @@ making changes. Conventions here are mandatory unless the user asks otherwise.
   `allow_redirects=False` because the Publora key rides a custom header and the
   Apify token a query parameter, neither of which `requests` strips across hosts.
   `scripts/check_security_boundaries.py` enforces all three.
+- `references/mcp-read-layer.md` is the read path for anyone without a shell, which
+  is everyone on claude.ai: the filtered `mcp.apify.com?actors=` connector URL, the
+  tool name, the four input shapes, and the mapping back to the records `_tweet`
+  produces. **Keep the filter**: the bare server also hands the agent `call-actor`.
+  `scripts/check_mcp_mapping.py` fails if the actor id, an input key or a flat field
+  drifts from `lib/apify_client.py`, in either direction.
 - Skill-local references live in `skills/<skill>/references/`. Cite from the skill
   with bare `references/X.md`. Cite root from skills with `../../references/X.md`.
 - `x-humanizer` has `sub-skills/` for the folded-in post-audit workflow.
@@ -128,6 +134,7 @@ python3 scripts/check_markdown_references.py  # run from inside the repo; it anc
 python3 scripts/check_untrusted_rule.py  # the rule must sit in the skills, not only in references/
 python3 scripts/check_text_encoding.py  # a bare read_text() is cp1252 on Windows, mojibake or a crash
 python3 scripts/check_security_boundaries.py  # .env may not name an executable; no authenticated redirects
+python3 scripts/check_mcp_mapping.py  # the connector path must produce the library's records, not a second shape
 python3 -m json.tool .codex-plugin/plugin.json >/dev/null
 python3 -m json.tool .agents/plugins/marketplace.json >/dev/null
 python3 -m json.tool .claude-plugin/plugin.json >/dev/null

@@ -170,6 +170,34 @@ class ApifyClient:
         self._cput(ck, out)
         return out
 
+    def fetch_tweet(self, url_or_id: str,
+                    force_refresh: bool = False) -> Optional[dict]:
+        """One tweet, by URL or bare id, normalized like every other read.
+
+        `fetch_tweet_replies` keeps only rows where `isReply` is true, so the
+        tweet a user actually pasted was the one thing the read layer could not
+        return. x-hook-extractor and x-reply-drafter both take a tweet URL and
+        both had to ask for a paste because of it. The actor answers for
+        `tweetIds` directly, which is the same run and the same cost.
+
+        Returns None when the tweet is not retrievable (deleted, protected, or
+        an id that does not exist), so callers fall back to asking for a paste.
+        """
+        from .url_parser import parse_x_url
+
+        tweet_id = parse_x_url(url_or_id).get("tweet_id")
+        if not tweet_id:
+            raise ValueError(f"not a tweet URL or id: {url_or_id!r}")
+        ck = f"tweet:{tweet_id}"
+        if not force_refresh and (c := self._cget(ck)) is not None:
+            return c
+        rows = self._run({"tweetIds": [tweet_id], "maxItems": 1})
+        hit = next((t for t in rows
+                    if isinstance(t, dict) and str(t.get("id")) == tweet_id), None)
+        out = _tweet(hit) if hit else None
+        self._cput(ck, out)
+        return out
+
     def fetch_tweet_replies(self, tweet_url: str, max_items: int = 50,
                            force_refresh: bool = False) -> list[dict]:
         """Replies on a tweet (the X engagement signal, since likers are gated).
