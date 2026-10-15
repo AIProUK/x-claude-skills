@@ -27,8 +27,8 @@ sys.path.insert(0, str(ROOT))
 
 DOC = ROOT / "references" / "mcp-read-layer.md"
 CLIENT = ROOT / "lib" / "apify_client.py"
-#: (module, attribute) of the function that flattens an actor row.
-NORMALIZER = ("lib.apify_client", "_tweet")
+#: (module, attribute) of every function that flattens an actor row.
+NORMALIZERS = (("lib.apify_client", "_tweet"),)
 #: Input keys that are near-misses, documented so nobody sends them again.
 WARN_ABOUT = ("sort",)
 
@@ -71,10 +71,52 @@ def payload_keys(tree: ast.AST) -> set[str]:
     return keys
 
 
+def per_normalizer_fields() -> list[tuple[str, set[str]]]:
+    out = []
+    for module_name, attr in NORMALIZERS:
+        module = importlib.import_module(module_name)
+        produced = getattr(module, attr)({})
+        out.append((attr, {k for k in produced if not k.startswith("_")}))
+    return out
+
+
 def flat_fields() -> set[str]:
-    module = importlib.import_module(NORMALIZER[0])
-    produced = getattr(module, NORMALIZER[1])({})
-    return {k for k in produced if not k.startswith("_")}
+    fields = set()
+    for _, produced in per_normalizer_fields():
+        fields |= produced
+    return fields
+
+
+def table_for(doc: str, attr: str) -> set[str] | None:
+    """Fields of the mapping table that the prose attributes to `attr`.
+
+    Matching by name is what makes the check precise: when one shape's fields
+    are a superset of another's, a "some table covers it" test passes even
+    after a row is deleted from the right one. Each table must be introduced
+    with the normalizer it belongs to, e.g. "what `_profile_post` produces".
+    """
+    marker = re.search(r"`" + re.escape(attr) + r"`", doc)
+    if not marker:
+        return None
+    after = doc[marker.end():]
+    if "| Flat field |" not in after:
+        return None
+    body = after.split("| Flat field |", 1)[1].split(chr(10) * 2, 1)[0]
+    return set(re.findall(r"^\| `([a-z_][a-z0-9_]*)` \|", body, re.M))
+
+
+def mapping_tables(doc: str) -> list[set[str]]:
+    """Field sets of every `| Flat field |` table in the document.
+
+    Checked per table, not across the whole file: with two shapes that share
+    field names, dropping a row from one table still leaves the name present
+    somewhere else, and a whole-document check would pass.
+    """
+    tables = []
+    for chunk in doc.split("| Flat field |")[1:]:
+        body = chunk.split(chr(10) * 2, 1)[0]   # to the blank line after the table
+        tables.append(set(re.findall(r"^\| `([a-z_][a-z0-9_]*)` \|", body, re.M)))
+    return tables
 
 
 def main() -> int:
@@ -108,9 +150,24 @@ def main() -> int:
         if not re.search(r"`" + re.escape(field) + r"`", doc):
             problems.append(f"flat field `{field}` is produced by the client and undocumented")
 
-    table = set(re.findall(r"^\| `([a-z_][a-z0-9_]*)` \|", doc, re.M))
-    for field in sorted(table - fields):
-        problems.append(f"the mapping table documents `{field}`, which the client never produces")
+    tables = mapping_tables(doc)
+    known = set().union(*tables) if tables else set()
+    for field in sorted(known - fields):
+        problems.append(f"a mapping table documents `{field}`, which the client never produces")
+
+    for attr, produced in per_normalizer_fields():
+        own = table_for(doc, attr)
+        if own is None:
+            problems.append(
+                f"the doc never names {attr} before a mapping table, so there is no way to "
+                f"tell which table is its contract")
+            continue
+        missing = sorted(produced - own)
+        if missing:
+            problems.append(f"the table documented for {attr} is missing: {', '.join(missing)}")
+        extra = sorted(own - produced)
+        if extra:
+            problems.append(f"the table documented for {attr} adds fields it never produces: {', '.join(extra)}")
 
     if "mcp.apify.com?actors=" not in doc:
         problems.append("the doc does not give the filtered connector URL")
